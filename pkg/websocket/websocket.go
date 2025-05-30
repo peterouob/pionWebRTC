@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/gorilla/websocket"
-	"github.com/peterouob/pionWebRTC/pkg/signal"
 	wbc "github.com/peterouob/pionWebRTC/pkg/webrtc"
+	"github.com/peterouob/pionWebRTC/signal"
 	"log"
 	"net/http"
 )
@@ -24,7 +24,7 @@ func HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 		log.Println("[websocket] upgrade err:", err.Error())
 		return
 	}
-
+	log.Println("[websocket] websocket 協議升級完成")
 	defer func() {
 		_ = conn.Close()
 	}()
