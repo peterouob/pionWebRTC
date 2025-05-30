@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebRTC 直播範例</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; }
+        h1, h2 { color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        video { width: 320px; height: 240px; border: 1px solid #ddd; background-color: #000; margin: 5px; border-radius: 4px;}
+        button { padding: 10px 15px; margin: 5px; border: none; border-radius: 4px; cursor: pointer; background-color: #5cb85c; color: white; }
+        button:hover { background-color: #4cae4c; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .videos { display: flex; flex-wrap: wrap; }
+        .status { margin-top: 10px; font-style: italic; color: #555; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>WebRTC 直播範例</h1>
+    <button id="startBroadcastBtn">開始廣播</button>
+    <button id="startViewBtn">開始觀看</button>
+    <p class="status" id="statusLabel">狀態: 未連接</p>
+</div>
+
+<div class="container videos">
+    <div>
+        <h2>遠端視訊 (僅觀看者)</h2>
+        <video id="remoteVideo" autoplay playsinline></video>
+    </div>
+</div>
+
+<script>
+    const remoteVideo = document.getElementById('remoteVideo');
+    const startBroadcastBtn = document.getElementById('startBroadcastBtn');
+    const startViewBtn = document.getElementById('startViewBtn');
+    const statusLabel = document.getElementById('statusLabel');
+
+    let ws;
+    let pc;
+    let localStream;
+    let currentRole = ''; // 'broadcaster' or 'viewer'
+
+    const peerConnectionConfig = {
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    };
+
+    function connectWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(protocol + "//" + window.location.host + "/ws");
+
+        ws.onopen = () => {
+            console.log("WebSocket 已連接");
+            statusLabel.textContent = "狀態: WebSocket 已連接";
+            enableButtons();
+        };
+
+        ws.onmessage = async (event) => {
+            const signal = JSON.parse(event.data);
+            console.log("收到信令:", signal);
+            statusLabel.textContent = `狀態: 收到信令 ${signal.type}`;
+
+
+            if (!pc && (signal.type === 'answer' || (signal.type === 'offer' && currentRole === 'viewer'))) {
+                console.warn("PeerConnection 未初始化，但收到 answer/offer:", signal);
+                // 在此範例中，客戶端總是先發起 Offer
+                // 如果伺服器可以發起 Offer 給觀看者，則需要不同處理
+                return;
+            }
+
+
+            switch (signal.type) {
+                case "answer":
+                    if (pc) {
+                        try {
+                            await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+                            console.log(`${currentRole}: 遠端描述 (Answer) 已設定`);
+                            statusLabel.textContent = `狀態: ${currentRole} 遠端描述 (Answer) 已設定`;
+                        } catch (e) {
+                            console.error(`${currentRole}: 設定遠端描述失敗:`, e);
+                            statusLabel.textContent = `狀態: ${currentRole} 設定遠端描述失敗`;
+                        }
+                    }
+                    break;
+                case "candidate":
+                    if (pc && signal.candidate) {
+                        try {
+                            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                            // console.log(`${currentRole}: ICE Candidate 已加入`);
+                        } catch (e) {
+                            console.error(`${currentRole}: 加入 ICE Candidate 失敗:`, e);
+                        }
+                    }
+                    break;
+                case "error":
+                    alert("伺服器錯誤: " + signal.message);
+                    statusLabel.textContent = "狀態: 伺服器錯誤 - " + signal.message;
+                    resetState();
+                    break;
+                default:
+                    console.log("收到未知信令類型:", signal.type);
+            }
+        };
+
+        ws.onclose = () => {
+            console.log("WebSocket 已斷開");
+            statusLabel.textContent = "狀態: WebSocket 已斷開. 請重新整理頁面.";
+            disableButtons();
+            resetState(false); // 不要重新連接 WebSocket
+        };
+        ws.onerror = (err) => {
+            console.error("WebSocket 錯誤:", err);
+            statusLabel.textContent = "狀態: WebSocket 錯誤.";
+            disableButtons();
+        };
+    }
+
+    async function createPeerConnection() {
+        pc = new RTCPeerConnection(peerConnectionConfig);
+
+        pc.onicecandidate = event => {
+            if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "candidate", candidate: event.candidate.toJSON() }));
+            }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+            if(pc) {
+                console.log(`${currentRole} ICE 連接狀態: ${pc.iceConnectionState}`);
+                statusLabel.textContent = `狀態: ${currentRole} ICE 連接狀態: ${pc.iceConnectionState}`;
+                console.log(currentRole);
+                if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'closed') {
+                    // 可以嘗試 ICE 重啟或提示用戶
+                }
+            }
+        };
+
+
+        if (currentRole === "viewer") {
+            pc.ontrack = event => {
+                console.log("hello");
+                console.log("觀看者: 收到軌道 (ontrack event):", event); // <--- 新增詳細日誌
+                statusLabel.textContent = "狀態: 觀看者收到軌道";
+                if (event.streams && event.streams[0]) { // <--- 檢查 event.streams[0] 是否存在
+                    console.log("觀看者: 正在將 stream 設定到 remoteVideo:", event.streams[0]);
+                    if (remoteVideo.srcObject !== event.streams[0]) {
+                        remoteVideo.srcObject = event.streams[0];
+                        console.log("觀看者: 遠端串流已設定至 video 元素");
+                    }
+                } else {
+                    // 有些較新的瀏覽器/API 版本可能直接在 event.track 中提供軌道，並且需要手動加到 MediaStream 中
+                    console.warn("觀看者: event.streams[0] 為空，嘗試使用 event.track");
+                    if (event.track) {
+                        let stream = remoteVideo.srcObject;
+                        if (stream) {
+                            stream.addTrack(event.track);
+                        } else {
+                            stream = new MediaStream();
+                            stream.addTrack(event.track);
+                            remoteVideo.srcObject = stream;
+                            console.log("觀看者: 已從 event.track 建立新串流並設定至 video 元素");
+                        }
+                    } else {
+                        console.error("觀看者: ontrack 事件中既沒有 event.streams[0] 也沒有 event.track");
+                    }
+                }
+            };
+        }}
+
+    startBroadcastBtn.onclick = async () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            alert("WebSocket 未連接!");
+            return;
+        }
+        currentRole = 'broadcaster';
+        disableButtons();
+        statusLabel.textContent = "狀態: 正在啟動廣播...";
+
+        ws.send(JSON.stringify({ type: "join", role: "broadcaster" }));
+
+        await createPeerConnection();
+
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true }); // 可以啟用 audio
+            remoteVideo.srcObject = localStream;
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+            console.log("廣播者: 本地媒體已獲取並加入軌道");
+            statusLabel.textContent = "狀態: 廣播者本地媒體已獲取";
+        } catch (e) {
+            console.error("廣播者: 獲取使用者媒體失敗", e);
+            alert("無法存取鏡頭/麥克風: " + e.message);
+            resetState();
+            return;
+        }
+
+        try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            ws.send(JSON.stringify({ type: "offer", sdp: pc.localDescription.toJSON() }));
+            console.log("廣播者: Offer 已建立並發送");
+            statusLabel.textContent = "狀態: 廣播者 Offer 已發送";
+        } catch (e) {
+            console.error("廣播者: 建立 Offer 失敗", e);
+            statusLabel.textContent = "狀態: 廣播者建立 Offer 失敗";
+            resetState();
+        }
+    };
+    let isConnecting = false;
+    let currentOperationRole = ''; // 用於追蹤當前操作的角色，避免廣播和觀看衝突
+
+    startViewBtn.onclick = async () => {
+        try {
+
+            currentRole = 'viewer';
+            disableButtons();
+            ws.send(JSON.stringify({ type: "join", role: "viewer" })); // 先發送 join
+            statusLabel.textContent = "狀態: 正在加入為觀看者...";
+
+            await createPeerConnection(); // 建立 PeerConnection
+            console.log("觀看者端: createPeerConnection 完成, pc object:", pc); // 檢查 pc 是否有效
+
+            const offerOptions = {
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: true
+            };
+            const offer = await pc.createOffer(offerOptions);
+            console.log("觀看者端: createOffer 結果:", offer); // 檢查 offer 物件
+
+            if (!offer || !offer.sdp) {
+                console.error("觀看者端: createOffer 未返回有效的 SDP!");
+                statusLabel.textContent = "狀態: createOffer 失敗 (SDP無效)";
+                resetState();
+                return;
+            }
+
+            await pc.setLocalDescription(offer);
+            console.log("觀看者端: setLocalDescription 完成後, pc.localDescription (toJSON):", pc.localDescription.toJSON()); // <--- 非常重要
+            console.log("觀看者端: setLocalDescription 完成後, pc.localDescription.sdp (string):", pc.localDescription.sdp); // <--- 非常重要
+            console.log(1+1);
+            if (!pc.localDescription || !pc.localDescription.sdp || pc.localDescription.sdp.indexOf("ice-ufrag") === -1) {
+                console.error("觀看者端: setLocalDescription 後 pc.localDescription.sdp 不完整或缺少 ice-ufrag!");
+                statusLabel.textContent = "狀態: localDescription 不完整";
+                // 不要發送這個不完整的 offer
+                resetState(); // 可以選擇是否重置
+                return; // 阻止發送
+            }
+
+            ws.send(JSON.stringify({ type: "offer", sdp: pc.localDescription.toJSON() }));
+            console.log("觀看者: Offer 已建立並發送");
+            statusLabel.textContent = "狀態: 觀看者 Offer 已發送";
+        } catch (e) {
+            console.error("觀看者: 建立或發送 Offer 過程中發生錯誤", e);
+            statusLabel.textContent = "狀態: 觀看者建立 Offer 失敗 - " + e.message;
+            resetState();
+        }
+    };
+
+    function disableButtons() {
+        startBroadcastBtn.disabled = true;
+        startViewBtn.disabled = true;
+    }
+
+    function enableButtons() {
+        startBroadcastBtn.disabled = false;
+        startViewBtn.disabled = false;
+    }
+
+    function resetState(shouldReconnectWs = true) {
+        console.log("resetState 被調用, shouldReconnectWs:", shouldReconnectWs);
+        if (pc) {
+            pc.close();
+            pc = null;
+            console.log("PeerConnection 已關閉並設為 null");
+        }
+        if (localStream) {
+            localStream.getTracks().forEach(track => track.stop());
+            localStream = null;
+            console.log("本地流已停止並清理");
+        }
+        remoteVideo.srcObject = null;
+        console.log("遠端視訊已清理");
+
+        // 只有當 isConnecting 並且是當前操作的角色導致的 reset 時，才重置 isConnecting
+        // 或者，更簡單的方式是，每次 reset 都重置 isConnecting
+        isConnecting = false;
+        currentOperationRole = ''; // 清除當前操作角色
+        // currentRole 不一定需要清除，取決於您的設計
+
+        enableButtons(); // 重新啟用按鈕
+        statusLabel.textContent = "狀態: 未連接/已重置";
+
+
+        if(shouldReconnectWs) {
+            console.log("正在嘗試重新連接 WebSocket...");
+            connectWebSocket(); // connectWebSocket 應該總是建立一個新的 ws 實例
+        }
+    }
+
+    // 初始化
+    connectWebSocket();
+
+</script>
+</body>
+</html>
