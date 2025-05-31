@@ -25,7 +25,7 @@ func main() {
 	})
 
 	log.Println("Start server ...")
-	if err := r.Run(":8080"); err != nil {
+	if err := r.Run(":8081"); err != nil {
 		log.Fatalln("Server failed to start:", err)
 	}
 }
