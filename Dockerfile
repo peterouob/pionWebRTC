@@ -14,7 +14,7 @@ RUN GOARCH=$TARGETARCH go build -o main .
 FROM gcr.io/distroless/base
 
 COPY --from=base ./app/main .
-
+COPY --from=base /app/index.html .
 
 EXPOSE 8080
 

@@ -15,7 +15,6 @@ func HandleSignal(s signal.Signal, client *signal.ClientState) error {
 		log.Println("[FATAL] WebRTCManager not initialized!")
 		return errors.New("WebRTCManager not initialized")
 	}
-
 	switch s.Type {
 	case "join":
 		client.Role = s.Role
@@ -97,7 +96,9 @@ func HandleSignal(s signal.Signal, client *signal.ClientState) error {
 			})
 			Manager.broadcastMU.Unlock()
 
-		} else if client.Role == "viewer" {
+		}
+
+		if client.Role == "viewer" {
 			track, ok := Manager.GetBroadcastTrack()
 			if !ok {
 				_ = client.PeerConnection.Close()
@@ -112,6 +113,7 @@ func HandleSignal(s signal.Signal, client *signal.ClientState) error {
 			log.Println("[webrtc] viewer added broadcast track to their peer connection")
 		}
 
+		//  Remote
 		if err := client.PeerConnection.SetRemoteDescription(*s.SDP); err != nil {
 			log.Printf("[webrtc] cannot set remote description for %s: %s\n", client.Role, err)
 			_ = client.PeerConnection.Close()
@@ -125,11 +127,22 @@ func HandleSignal(s signal.Signal, client *signal.ClientState) error {
 			return ContinueErr
 		}
 
+		// Local
 		if err := client.PeerConnection.SetLocalDescription(answer); err != nil {
 			log.Printf("[webrtc] cannot set local description for %s: %s\n", client.Role, err)
 			_ = client.PeerConnection.Close()
 			return ContinueErr
 		}
+
+		client.RemoteDescSet = true
+
+		for _, c := range client.PendingCandidates {
+			if err := client.PeerConnection.AddICECandidate(c); err != nil {
+				log.Printf("[webrtc] cannot add ICE Candidate for %s: %s", client.Role, err.Error())
+			}
+		}
+
+		client.PendingCandidates = nil
 
 		payload, err := json.Marshal(signal.Signal{Type: "answer", SDP: &answer})
 		if err != nil {
@@ -142,19 +155,26 @@ func HandleSignal(s signal.Signal, client *signal.ClientState) error {
 		}
 		log.Println("[websocket] sent answer to", client.Role)
 		return nil
-
 	case "candidate":
 		if s.Candidate == nil {
-			log.Printf("Received nil candidate from %s (%s)", client.Role, client.Conn.RemoteAddr().String())
+			log.Printf("[webrtc] received nil candidate from %s (%s)", client.Role, client.Conn.RemoteAddr().String())
 			return ContinueErr
 		}
 		if client.PeerConnection == nil {
-			log.Printf("Received candidate for %s (%s) but peer connection not initialized", client.Role, client.Conn.RemoteAddr().String())
+			log.Printf("[webrtc] received candidate for %s (%s) but peer connection not initialized", client.Role, client.Conn.RemoteAddr().String())
 			return ContinueErr
 		}
-		if err := client.PeerConnection.AddICECandidate(*s.Candidate); err != nil {
-			log.Printf("Cannot add ICE Candidate for %s: %s", client.Role, err.Error())
+
+		if !client.RemoteDescSet {
+			log.Printf("[webrtc] remote sdp not set yet caching ICE candidate for %s", client.Role)
+			client.PendingCandidates = append(client.PendingCandidates, *s.Candidate)
+			return nil
 		}
+
+		if err := client.PeerConnection.AddICECandidate(*s.Candidate); err != nil {
+			log.Printf("[webrtc] cannot add ICE Candidate for %s: %s", client.Role, err.Error())
+		}
+
 		return nil
 
 	default:

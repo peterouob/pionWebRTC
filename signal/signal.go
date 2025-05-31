@@ -13,7 +13,9 @@ type Signal struct {
 	Message   string                     `json:"message,omitempty"`
 }
 type ClientState struct {
-	PeerConnection *webrtc.PeerConnection
-	Role           string
-	Conn           *websocket.Conn
+	PeerConnection    *webrtc.PeerConnection
+	Role              string
+	Conn              *websocket.Conn
+	PendingCandidates []webrtc.ICECandidateInit
+	RemoteDescSet     bool
 }

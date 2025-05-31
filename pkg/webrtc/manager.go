@@ -102,5 +102,5 @@ func (m *WebRTCManager) GetBroadcastTrack() (*webrtc.TrackLocalStaticRTP, bool) 
 func (m *WebRTCManager) HasActiveBroadcast() bool {
 	m.broadcastMU.RLock()
 	defer m.broadcastMU.RUnlock()
-	return m.broadcastPeer != nil
+	return m.broadcastPeer != nil && m.broadcastTrack != nil
 }

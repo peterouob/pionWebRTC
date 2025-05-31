@@ -24,17 +24,35 @@ func HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 		log.Println("[websocket] upgrade err:", err.Error())
 		return
 	}
-	log.Println("[websocket] websocket 協議升級完成")
-	defer func() {
-		_ = conn.Close()
-	}()
+	log.Println("[websocket] websocket upgrade success")
 
 	client := &signal.ClientState{Conn: conn}
+
+	defer func() {
+		log.Printf("[websocket] Cleaning up for client: %s", conn.RemoteAddr().String())
+
+		if client.PeerConnection != nil {
+			log.Printf("[webrtc] Closing PeerConnection for client %s (Role: %s)", conn.RemoteAddr().String(), client.Role)
+			if err := client.PeerConnection.Close(); err != nil {
+				log.Printf("[webrtc] Error closing PeerConnection for %s: %v", conn.RemoteAddr().String(), err)
+			}
+		}
+
+		if client.Role == "broadcaster" {
+			log.Printf("[Manager] Client %s was a broadcaster. Attempting to clean broadcaster state.", conn.RemoteAddr().String())
+			wbc.Manager.Clean(client.PeerConnection)
+		}
+
+	}()
 
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Println("[websocket] read message err:", err.Error())
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
+				log.Printf("[websocket] Unexpected close error from %s: %v", conn.RemoteAddr().String(), err)
+			} else {
+				log.Printf("[websocket] Client %s gracefully closed connection or read error: %v", conn.RemoteAddr().String(), err)
+			}
 			break
 		}
 

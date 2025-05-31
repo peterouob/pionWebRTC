@@ -1,11 +1,12 @@
 package main
 
 import (
+	"log"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	wbc "github.com/peterouob/pionWebRTC/pkg/webrtc"
 	"github.com/peterouob/pionWebRTC/pkg/websocket"
-	"log"
-	"net/http"
 )
 
 func main() {
