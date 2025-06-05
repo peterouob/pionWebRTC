@@ -5,9 +5,9 @@ import (
 	"errors"
 	"github.com/gorilla/websocket"
 	wbc "github.com/peterouob/pionWebRTC/pkg/webrtc"
-	"github.com/peterouob/pionWebRTC/signal"
 	"log"
 	"net/http"
+	"time"
 )
 
 var (
@@ -16,6 +16,8 @@ var (
 			return true
 		},
 	}
+
+	heartBeatTime = 30 * time.Second
 )
 
 func HandleWebsocket(w http.ResponseWriter, r *http.Request) {
@@ -26,44 +28,71 @@ func HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Println("[websocket] websocket upgrade success")
 
-	client := &signal.ClientState{Conn: conn}
+	clientAddr := conn.RemoteAddr().String()
+	client := wbc.NewClientState(conn, 10*time.Second, clientAddr)
 
 	defer func() {
-		log.Printf("[websocket] Cleaning up for client: %s", conn.RemoteAddr().String())
+		log.Printf("[websocket] Cleaning up for client: %s", clientAddr)
 
-		if client.PeerConnection != nil {
-			log.Printf("[webrtc] Closing PeerConnection for client %s (Role: %s)", conn.RemoteAddr().String(), client.Role)
-			if err := client.PeerConnection.Close(); err != nil {
-				log.Printf("[webrtc] Error closing PeerConnection for %s: %v", conn.RemoteAddr().String(), err)
+		if err != nil {
+			if errors.Is(client.Close(), wbc.ErrCloseClientState) {
+				log.Println("[websocket] close client for webrtc peer err :", err.Error())
 			}
-		}
-
-		if client.Role == "broadcaster" {
-			log.Printf("[Manager] Client %s was a broadcaster. Attempting to clean broadcaster state.", conn.RemoteAddr().String())
-			wbc.Manager.Clean(client.PeerConnection)
+			log.Println("[websocket] close client state err :", err.Error())
 		}
 
 	}()
+
+	go heartBeat(client)
 
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure) {
-				log.Printf("[websocket] Unexpected close error from %s: %v", conn.RemoteAddr().String(), err)
+				log.Printf("[websocket] Unexpected close error from %s: %v", clientAddr, err)
+				if err := client.Close(); err != nil {
+					log.Println("[websocket] clean err:", err.Error())
+				}
 			} else {
-				log.Printf("[websocket] Client %s gracefully closed connection or read error: %v", conn.RemoteAddr().String(), err)
+				log.Printf("[websocket] Client %s gracefully closed connection or read error: %v", clientAddr, err)
+				if err := client.Close(); err != nil {
+					log.Println("[websocket] clean err:", err.Error())
+				}
 			}
 			break
 		}
 
-		var s signal.Signal
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Minute))
+
+		var s wbc.Signal
 		if err := json.Unmarshal(message, &s); err != nil {
 			log.Println("[websocket] unmarshal err:", err.Error())
 			continue
 		}
-		if errors.Is(wbc.HandleSignal(s, client), wbc.ContinueErr) {
-			continue
-		}
 
+		if err := wbc.HandleSignal(s, client); err != nil {
+			if errors.Is(err, wbc.ErrContinue) {
+				log.Printf("[websocket] continuing after recoverable error from %s", clientAddr)
+				continue
+			}
+		}
+	}
+}
+
+func heartBeat(c *wbc.ClientState) {
+	ticker := time.NewTicker(heartBeatTime)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			_ = c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("[websocket] ping failed for %s: %v", c.ClientAddr, err)
+				return
+			}
+			c.UpdatePing()
+			log.Printf("[websocket] ping sent to %s", c.ClientAddr)
+		}
 	}
 }

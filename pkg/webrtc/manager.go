@@ -19,8 +19,9 @@ type WebRTCManager struct {
 }
 
 var (
-	Manager     *WebRTCManager
-	ContinueErr = errors.New("continue")
+	Manager          *WebRTCManager
+	ErrContinue      = errors.New("continue")
+	ErrMoreBroadcast = errors.New("too many broadcast")
 )
 
 const DefaultPLITimeout = 3000 * time.Millisecond
