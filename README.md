@@ -1,4 +1,13 @@
-# Error 
+＃ 心得
 
-- 先broadcast連接後關閉瀏覽器再重新連接會error
-`2025/06/05 11:38:15 [webrtc][candidate] remote sdp not set yet caching ICE candidate for broadcaster`
+起初會想寫主要是為了搭配朋友期末的硬體編寫專案，在過程中因為不了解webRTC內部複雜的機制，因此常常遇到問題
+
+一開始選擇使用Restful API方式發起會議加入請求，但這樣沒辦法進行長連接通訊
+
+因此轉而決定使用websocket(以golang中的gorilla為主)
+
+
+後來再詳細閱讀相關webRTC的RFC以及手冊後，先以改變example開始慢慢完成
+
+
+一開始很常會遇到連接過後再次請求錯誤的原因，後來發現是因為有部分連接在退出的時候沒有清楚乾淨導致
